@@ -56,7 +56,7 @@ if __name__ == "__main__":
       "features. The model must also be set appropriately (i.e. to read 3D "
       "batches VS 4D batches.")
   flags.DEFINE_string(
-      "model", "LogisticModel",
+      "model", "FrameLevelLogisticModel,DbofModel",
       "Which architecture to use for the model. Models are defined "
       "in models.py.")
   flags.DEFINE_bool(
@@ -78,7 +78,8 @@ if __name__ == "__main__":
   flags.DEFINE_float("learning_rate_decay", 0.95,
                      "Learning rate decay factor to be applied every "
                      "learning_rate_decay_examples.")
-  flags.DEFINE_float("learning_rate_decay_examples", 4000000,
+  #default decay_examples=4000000
+  flags.DEFINE_float("learning_rate_decay_examples", 2000000,
                      "Multiply current learning rate by learning_rate_decay "
                      "every learning_rate_decay_examples.")
   flags.DEFINE_integer("num_epochs", 5,
@@ -176,6 +177,12 @@ def get_input_data_tensors(reader,
 
 def find_class_by_name(name, modules):
   """Searches the provided modules for the named class and returns it."""
+  # modules=[]
+  # for name_ in name.split(','):#this is the added one
+  #   modules.append([getattr(module, name_, None) for module in modules])
+  # logging.info("this is the name for modules:%s",str(modules))
+
+
   modules = [getattr(module, name, None) for module in modules]
   return next(a for a in modules if a)
 
@@ -202,6 +209,7 @@ def build_graph(reader,
     reader: The data file reader. It should inherit from BaseReader.
     model: The core model (e.g. logistic or neural net). It should inherit
            from BaseModel.
+
     train_data_pattern: glob path to the training data files.
     label_loss_fn: What kind of loss to apply to the model. It should inherit
                 from BaseLoss.
@@ -238,22 +246,24 @@ def build_graph(reader,
       learning_rate_decay,
       staircase=True)
   tf.summary.scalar('learning_rate', learning_rate)
-
-  optimizer = optimizer_class(learning_rate)
+  if optimizer_class== tf.train.MomentumOptimizer:
+      optimizer = optimizer_class(learning_rate,0.9,use_nesterov=True)
+  else:
+    optimizer = optimizer_class(learning_rate)
   unused_video_id, model_input_raw, labels_batch, num_frames = (
       get_input_data_tensors(
           reader,
           train_data_pattern,
           batch_size=batch_size * num_towers,
           num_readers=num_readers,
-          num_epochs=num_epochs))
+          num_epochs=num_epochs))##get the input
   tf.summary.histogram("model/input_raw", model_input_raw)
 
   feature_dim = len(model_input_raw.get_shape()) - 1
 
   model_input = tf.nn.l2_normalize(model_input_raw, feature_dim)
 
-  tower_inputs = tf.split(model_input, num_towers)
+  tower_inputs = tf.split(model_input, num_towers) #distribute the input to num_towers machines
   tower_labels = tf.split(labels_batch, num_towers)
   tower_num_frames = tf.split(num_frames, num_towers)
   tower_gradients = []
@@ -266,6 +276,7 @@ def build_graph(reader,
     with tf.device(device_string % i):
       with (tf.variable_scope(("tower"), reuse=True if i > 0 else None)):
         with (slim.arg_scope([slim.model_variable, slim.variable], device="/cpu:0" if num_gpus!=1 else "/gpu:0")):
+            ####create_model
           result = model.create_model(
             tower_inputs[i],
             num_frames=tower_num_frames[i],
@@ -312,10 +323,18 @@ def build_graph(reader,
               colocate_gradients_with_ops=False)
           tower_gradients.append(gradients)
   label_loss = tf.reduce_mean(tf.stack(tower_label_losses))
+
   tf.summary.scalar("label_loss", label_loss)
   if regularization_penalty != 0:
     reg_loss = tf.reduce_mean(tf.stack(tower_reg_losses))
-    tf.summary.scalar("reg_loss", reg_loss)
+    tf.summary.scalar("reg_loss", regularization_penalty*reg_loss)
+
+  # if regularization_penalty != 0:
+  #     reg_loss = tf.reduce_mean(tf.stack(tower_reg_losses))
+  #     if global_step.eval() > 100:
+  #       tf.summary.scalar("label_loss", label_loss)
+  #       tf.summary.scalar("reg_loss", regularization_penalty * reg_loss)
+###############################
   merged_gradients = utils.combine_gradients(tower_gradients)
 
   if clip_gradient_norm > 0:
@@ -387,7 +406,7 @@ class Trainer(object):
       with tf.device(device_fn):
         if not meta_filename:
           saver = self.build_model(self.model, self.reader)
-
+        #get the list of values from the graph
         global_step = tf.get_collection("global_step")[0]
         loss = tf.get_collection("loss")[0]
         predictions = tf.get_collection("predictions")[0]
@@ -411,6 +430,7 @@ class Trainer(object):
         logging.info("%s: Entering training loop.", task_as_string(self.task))
         while (not sv.should_stop()) and (not self.max_steps_reached):
           batch_start_time = time.time()
+          ##get the values from the run of the graph
           _, global_step_val, loss_val, predictions_val, labels_val = sess.run(
               [train_op, global_step, loss, predictions, labels])
           seconds_per_batch = time.time() - batch_start_time
@@ -432,18 +452,20 @@ class Trainer(object):
               " Examples/sec: " + ("%.2f" % examples_per_second) + " | Hit@1: " +
               ("%.2f" % hit_at_one) + " PERR: " + ("%.2f" % perr) +
               " GAP: " + ("%.2f" % gap))
+            #only label loss
 
-            sv.summary_writer.add_summary(
-                utils.MakeSummary("model/Training_Hit@1", hit_at_one),
-                global_step_val)
-            sv.summary_writer.add_summary(
-                utils.MakeSummary("model/Training_Perr", perr), global_step_val)
-            sv.summary_writer.add_summary(
-                utils.MakeSummary("model/Training_GAP", gap), global_step_val)
-            sv.summary_writer.add_summary(
-                utils.MakeSummary("global_step/Examples/Second",
-                                  examples_per_second), global_step_val)
-            sv.summary_writer.flush()
+            if self.is_master and 100 <= global_step_val:
+                sv.summary_writer.add_summary(
+                    utils.MakeSummary("model/Training_Hit@1", hit_at_one),
+                    global_step_val)
+                sv.summary_writer.add_summary(
+                    utils.MakeSummary("model/Training_Perr", perr), global_step_val)
+                sv.summary_writer.add_summary(
+                    utils.MakeSummary("model/Training_GAP", gap), global_step_val)
+                sv.summary_writer.add_summary(
+                    utils.MakeSummary("global_step/Examples/Second",
+                                      examples_per_second), global_step_val)
+                sv.summary_writer.flush()
 
             # Exporting the model every x steps
             time_to_export = ((self.last_model_export_step == 0) or
@@ -642,9 +664,19 @@ def main(unused_argv):
 
   # Dispatch to a master, a worker, or a parameter server.
   if not cluster or task.type == "master" or task.type == "worker":
-    model = find_class_by_name(FLAGS.model,
-        [frame_level_models, video_level_models])()
 
+    ####
+    model_names=FLAGS.model
+    if len(model_names.split(','))>1:
+        model=[]
+        for name in model_names.split(','):
+            modules = getattr(frame_level_models, name)
+            model.append(modules)
+    else:
+    ####
+        model = find_class_by_name(FLAGS.model,
+            [frame_level_models, video_level_models])()
+    ##model is the class corresponding to the frame_level_models and video_level_models
     reader = get_reader()
 
     model_exporter = export_model.ModelExporter(

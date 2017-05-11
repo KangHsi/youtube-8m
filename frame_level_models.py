@@ -20,10 +20,11 @@ import models
 import video_level_models
 import tensorflow as tf
 import model_utils as utils
-
+import utils as tools
+import numpy as np
 import tensorflow.contrib.slim as slim
 from tensorflow import flags
-
+from tensorflow import logging
 FLAGS = flags.FLAGS
 flags.DEFINE_integer("iterations", 30,
                      "Number of frames per batch for DBoF.")
@@ -47,6 +48,11 @@ flags.DEFINE_string("video_level_classifier_model", "MoeModel",
 flags.DEFINE_integer("lstm_cells", 1024, "Number of LSTM cells.")
 flags.DEFINE_integer("lstm_layers", 2, "Number of LSTM layers.")
 
+
+
+
+
+
 class FrameLevelLogisticModel(models.BaseModel):
 
   def create_model(self, model_input, vocab_size, num_frames, **unused_params):
@@ -69,18 +75,150 @@ class FrameLevelLogisticModel(models.BaseModel):
       model in the 'predictions' key. The dimensions of the tensor are
       'batch_size' x 'num_classes'.
     """
+  ##########################################################original logisticModel
+
+    # logging.info("model_input_shape: %s." ,str(model_input))
+    #
+    # ###(1,300,1024),padding to 300 frames even if the true num_frames not 300.
+    # ##if use audio_information, the vector becomes(?,300,1152),since 1152=1024+128
+    # num_frames = tf.cast(tf.expand_dims(num_frames, 1), tf.float32)
+    # feature_size = model_input.get_shape().as_list()[2]
+    #
+    # denominators = tf.reshape(
+    #     tf.tile(num_frames, [1, feature_size]), [-1, feature_size])
+    # ##
+    # logging.info("denominators: %s.", str(denominators))
+    #
+    # ##(1,1024)
+    # avg_pooled = tf.reduce_sum(model_input,
+    #                            axis=[1]) / denominators
+    # ##an average 1024 feature
+    # output = slim.fully_connected(
+    #     avg_pooled, vocab_size, activation_fn=tf.nn.sigmoid,
+    #     weights_regularizer=slim.l2_regularizer(1e-8))
+    # return {"predictions": output}
+
+  #############################################################
+
+
+
     num_frames = tf.cast(tf.expand_dims(num_frames, 1), tf.float32)
     feature_size = model_input.get_shape().as_list()[2]
+    extrac_frames=100
+    model_input = utils.SampleFramesOrdered(model_input, num_frames,extrac_frames)#
+    model_input=tf.expand_dims(model_input,-1)
+    logging.info("model_input_after_shape: %s.", str(model_input))
+    #batchsize*extrac_frames*feature_size
 
-    denominators = tf.reshape(
-        tf.tile(num_frames, [1, feature_size]), [-1, feature_size])
-    avg_pooled = tf.reduce_sum(model_input,
-                               axis=[1]) / denominators
+    ########
 
-    output = slim.fully_connected(
-        avg_pooled, vocab_size, activation_fn=tf.nn.sigmoid,
-        weights_regularizer=slim.l2_regularizer(1e-8))
-    return {"predictions": output}
+
+    filters = [16, 64, 256, 1024, 4096]
+    #dequantize
+    model_input=tools.Dequantize(model_input)
+
+    x = self._conv('conv1', model_input, time_stride=30,in_filters=1,out_filters= 100,feature_size=feature_size,
+                   strides=[1, 10, 1, 1],padding='VALID')
+    logging.info("after_conv1: %s.", str(x))
+    #8
+    bias = tf.get_variable('bias1', [100], tf.float32, initializer=tf.zeros_initializer())
+
+    x=self._relu(x+bias,0.0)
+
+    x=tf.nn.max_pool(x,ksize=[1,8,1,1],strides=[1,8,1,1],padding='VALID',name="max1")
+    #42
+
+
+    # logging.info("x_after_maxpool1: %s.", str(x))
+    # x=self._conv('conv2',x,time_stride=3,in_filters=filters[0],out_filters=filters[2],feature_size=1,
+    #              strides=[1,1,1,1],padding='SAME')
+    # bias = tf.get_variable('bias2', [filters[2]], tf.float32, initializer=tf.zeros_initializer())
+    #
+    # x = self._relu(x + bias,0.0)
+    #
+    # x=tf.nn.max_pool(x,ksize=[1,41,1,1],strides=[1,41,1,1],padding='VALID',name="max2")
+    # #21
+    #
+    # # x=self.group_conv(name='group',x=x,time_stride=21,in_filters=filters[1],out_filters=filters[2],strides=[1,1,1,1])
+    #
+    # x=tf.nn.relu6(x,name='relu6')
+
+
+
+    x=tf.contrib.layers.flatten(x)
+    # x=tf.nn.dropout(x,keep_prob=0.5)
+
+    logging.info("output: %s.", x)
+
+    # hidden = slim.fully_connected(
+    #     x, 8196, activation_fn=None,
+    #     weights_regularizer=slim.l2_regularizer(1e-8))
+    # # drop=tf.nn.dropout(hidden,keep_prob=0.5)
+    # hidden=tf.nn.relu(hidden,'relu6')
+
+
+    aggregated_model = getattr(video_level_models,
+                               FLAGS.video_level_classifier_model)
+    # logging.info("DBoF_activitions:%s", str(activation))
+    return aggregated_model().create_model(
+        model_input=x,
+        vocab_size=vocab_size,
+        **unused_params)
+
+    #bs*126*1
+
+
+
+    # denominators = tf.reshape(
+    #     tf.tile(num_frames, [1, feature_size]), [-1, feature_size])
+    # ##
+    # logging.info("denominators: %s.", str(denominators))
+    #
+    # ##(1,1024)
+    # avg_pooled = tf.reduce_sum(model_input,
+    #                            axis=[1]) / denominators
+    ##an average 1024 feature
+    # logging.info("vocab_size:%s",str(vocab_size))
+
+    # output = slim.fully_connected(
+    #     x, vocab_size, activation_fn=tf.nn.sigmoid,
+    #     weights_regularizer=slim.l2_regularizer(1e-8))
+    # return {"predictions": output}
+
+  def _conv(self, name, x, time_stride, in_filters,out_filters,feature_size, strides,padding='SAME'):
+      """Convolution."""
+      with tf.variable_scope(name):
+          n = time_stride * feature_size* out_filters
+          kernel = tf.get_variable(
+              'DW', [time_stride, feature_size, in_filters, out_filters],
+              tf.float32, initializer=tf.contrib.layers.xavier_initializer())
+          # tf.random_normal_initializer(
+          # stddev = np.sqrt(2.0 / n)
+          return tf.nn.conv2d(x, kernel, strides, padding=padding)
+
+  def _relu(self, x, leakiness=0.0):
+    """Relu, with optional leaky support."""
+
+    return tf.where(tf.less(x, 0.0), leakiness * x, x, name='leaky_relu')
+
+  def group_conv(self, name, x, time_stride, in_filters, out_filters, strides):
+    """group Convolution."""
+    with tf.variable_scope(name):
+      channel_multiplier = 4.0
+      n = 1 * time_stride * out_filters
+      dep_kernel = tf.get_variable(
+        'DW'  , [time_stride, 1, in_filters, channel_multiplier],
+        tf.float32, initializer=tf.random_normal_initializer(
+          stddev=np.sqrt(2.0*out_filters/n)))
+      pnt_kernel = tf.get_variable(
+        'DW'+'pntwise' , [1, 1, channel_multiplier*in_filters , out_filters],
+        tf.float32, initializer=tf.random_normal_initializer(
+          stddev=np.sqrt(2.0 / out_filters)))
+
+      return tf.nn.separable_conv2d(x, depthwise_filter=dep_kernel, pointwise_filter=pnt_kernel, strides=strides,
+                                   padding='SAME')
+
+
 
 class DbofModel(models.BaseModel):
   """Creates a Deep Bag of Frames model.
@@ -132,6 +270,11 @@ class DbofModel(models.BaseModel):
     max_frames = model_input.get_shape().as_list()[1]
     feature_size = model_input.get_shape().as_list()[2]
     reshaped_input = tf.reshape(model_input, [-1, feature_size])
+    ##dequantize
+    logging.info("max:%s",str(tf.arg_max(reshaped_input,1)))
+    logging.info("min:%s", str(tf.arg_min(reshaped_input,1)))
+    reshaped_input=tools.Dequantize(reshaped_input,255,0)
+
     tf.summary.histogram("input_hist", reshaped_input)
 
     if add_batch_norm:
@@ -186,9 +329,13 @@ class DbofModel(models.BaseModel):
       activation += hidden1_biases
     activation = tf.nn.relu6(activation)
     tf.summary.histogram("hidden1_output", activation)
+    #dropout
+    activation=tf.nn.dropout(activation,0.5)
+
 
     aggregated_model = getattr(video_level_models,
                                FLAGS.video_level_classifier_model)
+    logging.info("DBoF_activitions:%s", str(activation))
     return aggregated_model().create_model(
         model_input=activation,
         vocab_size=vocab_size,
@@ -217,7 +364,7 @@ class LstmModel(models.BaseModel):
     stacked_lstm = tf.contrib.rnn.MultiRNNCell(
             [
                 tf.contrib.rnn.BasicLSTMCell(
-                    lstm_size, forget_bias=1.0)
+                    lstm_size+128, forget_bias=1.0)
                 for _ in range(number_of_layers)
                 ])
 

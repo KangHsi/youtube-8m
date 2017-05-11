@@ -69,6 +69,31 @@ def SampleRandomFrames(model_input, num_frames, num_samples):
   index = tf.stack([batch_index, frame_index], 2)
   return tf.gather_nd(model_input, index)
 
+def SampleFramesOrdered(model_input, num_frames, num_samples):
+  """Samples a random set of frames of size num_samples.
+
+  Args:
+    model_input: A tensor of size batch_size x max_frames x feature_size
+    num_frames: A tensor of size batch_size x 1
+    num_samples: A scalar
+
+  Returns:
+    `model_input`: A tensor of size batch_size x num_samples x feature_size
+  """
+  batch_size = tf.shape(model_input)[0]
+  tmp=tf.tile(tf.range(0.0,1.0,1.0/num_samples),[batch_size])
+
+
+  frame_index = tf.cast(
+      tf.multiply(
+          tf.reshape(tmp,[batch_size,num_samples]),
+          tf.tile(tf.cast(num_frames, tf.float32), [1, num_samples])), tf.int32)
+  batch_index = tf.tile(
+      tf.expand_dims(tf.range(batch_size), 1), [1, num_samples])
+  index = tf.stack([batch_index, frame_index], 2)
+  return tf.gather_nd(model_input, index)
+
+
 def FramePooling(frames, method, **unused_params):
   """Pools over the frames of a video.
 

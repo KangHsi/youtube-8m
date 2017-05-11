@@ -24,7 +24,7 @@ import tensorflow.contrib.slim as slim
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer(
-    "moe_num_mixtures", 2,
+    "moe_num_mixtures", 4,
     "The number of mixtures (excluding the dummy 'expert') used for MoeModel.")
 
 class LogisticModel(models.BaseModel):
@@ -88,16 +88,78 @@ class MoeModel(models.BaseModel):
         activation_fn=None,
         weights_regularizer=slim.l2_regularizer(l2_penalty),
         scope="experts")
-
+    #expert has biases
+    #gate_activations [batch,vocab_size*(num_mixtures+1)]
+    #gating_distribution [batch,vocab_size,num_mixtures+1]
     gating_distribution = tf.nn.softmax(tf.reshape(
         gate_activations,
         [-1, num_mixtures + 1]))  # (Batch * #Labels) x (num_mixtures + 1)
+
+    #for each class, has num_mixtures+1 predict, that means the confidence for i-th experts and dummy eperts(no experts)
     expert_distribution = tf.nn.sigmoid(tf.reshape(
         expert_activations,
         [-1, num_mixtures]))  # (Batch * #Labels) x num_mixtures
 
     final_probabilities_by_class_and_batch = tf.reduce_sum(
         gating_distribution[:, :num_mixtures] * expert_distribution, 1)
+    #weighted average of the two experts of sigmoid prediction.  (batch,vocab_size)
+
+    final_probabilities = tf.reshape(final_probabilities_by_class_and_batch,
+                                     [-1, vocab_size])
+    return {"predictions": final_probabilities}
+
+
+class my_MoeModel(models.BaseModel):
+  """A softmax over a mixture of logistic models (with L2 regularization)."""
+
+  def create_model(self,
+                   model_input,
+                   vocab_size,
+                   num_mixtures=None,
+                   l2_penalty=1e-8,
+                   **unused_params):
+
+    num_mixtures = num_mixtures or FLAGS.moe_num_mixtures
+
+    gate_activations = slim.fully_connected(
+        model_input,
+        vocab_size * (num_mixtures + 1),
+        activation_fn=None,
+        biases_initializer=None,
+        weights_regularizer=slim.l2_regularizer(l2_penalty),
+        scope="gates")
+
+
+    expert_activations = slim.fully_connected(
+        model_input,
+        8192,
+        weights_regularizer=slim.l2_regularizer(l2_penalty),
+        scope="experts_l1")
+    expert_activations=tf.nn.relu6(expert_activations,'relu6')
+    # slim.dropout()
+
+    expert_activations = slim.fully_connected(
+        expert_activations,
+        vocab_size * num_mixtures,
+        activation_fn=None,
+        weights_regularizer=slim.l2_regularizer(l2_penalty),
+        scope="experts_l2")
+    #expert has biases
+    #gate_activations [batch,vocab_size*(num_mixtures+1)]
+    #gating_distribution [batch,vocab_size,num_mixtures+1]
+    gating_distribution = tf.nn.softmax(tf.reshape(
+        gate_activations,
+        [-1, num_mixtures + 1]))  # (Batch * #Labels) x (num_mixtures + 1)
+
+    #for each class, has num_mixtures+1 predict, that means the confidence for i-th experts and dummy eperts(no experts)
+    expert_distribution = tf.nn.sigmoid(tf.reshape(
+        expert_activations,
+        [-1, num_mixtures]))  # (Batch * #Labels) x num_mixtures
+
+    final_probabilities_by_class_and_batch = tf.reduce_sum(
+        gating_distribution[:, :num_mixtures] * expert_distribution, 1)
+    #weighted average of the two experts of sigmoid prediction.  (batch,vocab_size)
+
     final_probabilities = tf.reshape(final_probabilities_by_class_and_batch,
                                      [-1, vocab_size])
     return {"predictions": final_probabilities}

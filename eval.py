@@ -97,6 +97,7 @@ def get_input_evaluation_tensors(reader,
   logging.info("Using batch size of " + str(batch_size) + " for evaluation.")
   with tf.name_scope("eval_input"):
     files = gfile.Glob(data_pattern)
+
     if not files:
       raise IOError("Unable to find the evaluation files.")
     logging.info("number of evaluation files: " + str(len(files)))
@@ -253,6 +254,9 @@ def evaluation_loop(video_id_batch, prediction_batch, label_batch, loss,
       epoch_info_dict["epoch_id"] = global_step_val
 
       summary_writer.add_summary(summary_val, global_step_val)
+      ####
+      tf.summary.scalar("model/Val_GAP", epoch_info_dict["gap"])
+      ###
       epochinfo = utils.AddEpochSummary(
           summary_writer,
           global_step_val,
