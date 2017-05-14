@@ -117,11 +117,11 @@ class FrameLevelLogisticModel(models.BaseModel):
     #dequantize
     model_input=tools.Dequantize(model_input)
 
-    x = self._conv('conv1', model_input, time_stride=30,in_filters=1,out_filters= 100,feature_size=feature_size,
+    x = self._conv('conv1', model_input, time_stride=30,in_filters=1,out_filters= 400,feature_size=feature_size,
                    strides=[1, 10, 1, 1],padding='VALID')
     logging.info("after_conv1: %s.", str(x))
     #8
-    bias = tf.get_variable('bias1', [100], tf.float32, initializer=tf.zeros_initializer())
+    bias = tf.get_variable('bias1', [400], tf.float32, initializer=tf.zeros_initializer())
 
     x=self._relu(x+bias,0.0)
 
@@ -190,7 +190,7 @@ class FrameLevelLogisticModel(models.BaseModel):
       with tf.variable_scope(name):
           n = time_stride * feature_size* out_filters
           kernel = tf.get_variable(
-              'DW', [time_stride, feature_size, in_filters, out_filters],
+              'convW', [time_stride, feature_size, in_filters, out_filters],
               tf.float32, initializer=tf.contrib.layers.xavier_initializer())
           # tf.random_normal_initializer(
           # stddev = np.sqrt(2.0 / n)
@@ -271,9 +271,11 @@ class DbofModel(models.BaseModel):
     feature_size = model_input.get_shape().as_list()[2]
     reshaped_input = tf.reshape(model_input, [-1, feature_size])
     ##dequantize
-    logging.info("max:%s",str(tf.arg_max(reshaped_input,1)))
-    logging.info("min:%s", str(tf.arg_min(reshaped_input,1)))
-    reshaped_input=tools.Dequantize(reshaped_input,255,0)
+    logging.info("preprocessed input:%s",str(reshaped_input))
+
+    reshaped_input=tools.Dequantize(reshaped_input)
+
+    logging.info("deQuantized input:%s", str(reshaped_input))
 
     tf.summary.histogram("input_hist", reshaped_input)
 

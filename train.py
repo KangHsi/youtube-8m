@@ -56,7 +56,7 @@ if __name__ == "__main__":
       "features. The model must also be set appropriately (i.e. to read 3D "
       "batches VS 4D batches.")
   flags.DEFINE_string(
-      "model", "FrameLevelLogisticModel,DbofModel",
+      "model", "FrameLevelLogisticModel",
       "Which architecture to use for the model. Models are defined "
       "in models.py.")
   flags.DEFINE_bool(
@@ -262,7 +262,7 @@ def build_graph(reader,
   feature_dim = len(model_input_raw.get_shape()) - 1
 
   model_input = tf.nn.l2_normalize(model_input_raw, feature_dim)
-
+  logging.info("output_l2norm_type:%s",str(model_input))
   tower_inputs = tf.split(model_input, num_towers) #distribute the input to num_towers machines
   tower_labels = tf.split(labels_batch, num_towers)
   tower_num_frames = tf.split(num_frames, num_towers)
@@ -420,7 +420,7 @@ class Trainer(object):
         init_op=init_op,
         is_chief=self.is_master,
         global_step=global_step,
-        save_model_secs=15 * 60,
+        save_model_secs=60 * 60,
         save_summaries_secs=120,
         saver=saver)
 
