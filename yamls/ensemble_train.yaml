@@ -1,0 +1,65 @@
+name: ailab-shikang-tf-yt8m-frame-level-ensemble3
+owner: shikang@bytedance.com
+disable_timestamp_on_name: 1
+repos:
+    tf-youtube-8m: git@code.byted.org:lab/tf-youtube-8m.git#shikang
+
+cpus: 4
+mem: 32768
+disk: 2048000
+gpus: 2
+
+sh: >
+    source /opt/tiger/keras2/bin/activate;
+    export LD_LIBRARY_PATH=/usr/local/cuda-8.0/lib64:$LD_LIBRARY_PATH;
+    ROOT_DIR=$(pwd);
+    DATA_DIR="$(pwd)/frame_level_feature";
+    TRAIN_DATA_PATTERN="hdfs://haruna/user/lab/open/youtube8m/data/frame_level/train/train*.tfrecord"
+    VAL_DATA_PATTERN="hdfs://haruna/user/lab/open/youtube8m/data/frame_level/validate/validate-*.tfrecord"
+    Ensemble1_DATA="hdfs://haruna/user/shikang/dbof_hidden2/*"
+    Ensemble2_DATA="hdfs://haruna/user/shikang/my_lstm/*"
+    TRAIN_DIR="$ROOT_DIR/models/";
+    Ensemble1="$ROOT_DIR/dbof";
+    mkdir $Ensemble1;
+    Ensemble2="$ROOT_DIR/lstm";
+    mkdir $Ensemble2;
+    mkdir $TRAIN_DIR;
+    MODEL="my_DbofModel,my_LstmModel";
+    LABEL_LOSS="CrossEntropyLoss";
+    FEATURE_NAMES="rgb, audio";
+    FEATURE_SIZES="1024, 128";
+    DOWNLOAD_TMP_DIR="$ROOT_DIR/data_tmp";
+    mkdir $DOWNLOAD_TMP_DIR;
+    ENQUEUE_SIZE=4;
+    PORT=9190;
+    GPUS="0,1";
+    hdfs dfs -get $Ensemble1_DATA $Ensemble1;
+    hdfs dfs -get $Ensemble2_DATA $Ensemble2;
+    hdfs dfs -get $TRAIN_DATA_PATTERN $DOWNLOAD_TMP_DIR;
+    bash -c "nohup tensorboard --logdir=$TRAIN_DIR --port=$PORT &";
+    nvidia-smi;
+    cd tf-youtube-8m/youtube-8m/;
+    python -i train_restore.py
+    --train_data_pattern="$DOWNLOAD_TMP_DIR/*"
+    --feature_names="$FEATURE_NAMES"
+    --feature_sizes="$FEATURE_SIZES"
+    --train_dir="$Ensemble1,$Ensemble2"
+    --ensemble_dir="$TRAIN_DIR"
+    --frame_features=True
+    --model="$MODEL"
+    --base_learning_rate=4200.0
+    --regularization_penalty=50000.0
+    --learning_rate_decay=0.6
+    --learning_rate_decay_examples=2000000
+    --batch_size=128
+    --iterations=60
+    --label_loss="$LABEL_LOSS"
+    --gpus="$GPUS"
+    --num_epochs=5
+    --optimizer="AdamOptimizer"
+    --disp_batches=50
+    --export_model_steps=1000
+    --moe_num_mixtures=4
+    --start_new_model=True
+    cd $ROOT_DIR;
+    rm $DOWNLOAD_TMP_DIR;

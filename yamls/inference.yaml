@@ -1,0 +1,46 @@
+name: ailab-shikang-tf-yt8m-frame-level-inference_old
+owner: shikang@bytedance.com
+disable_timestamp_on_name: 1
+repos:
+    tf-youtube-8m: git@code.byted.org:lab/tf-youtube-8m.git#shikang
+
+cpus: 4
+mem: 32768
+disk: 960000
+gpus: 1
+
+sh: >
+    source /opt/tiger/keras2/bin/activate;
+    export LD_LIBRARY_PATH=/usr/local/cuda-8.0/lib64:$LD_LIBRARY_PATH;
+    ROOT_DIR=$(pwd);
+    DATA_DIR="$(pwd)/frame_level_feature";
+    TEST_DATA_PATTERN="hdfs://haruna/user/lab/open/youtube8m/data/frame_level/test/test*.tfrecord"
+    Ensemble1_DATA="hdfs://haruna/user/shikang/ensemble/*"
+    Ensemble2_DATA="hdfs://haruna/user/shikang/my_lstm/*"
+    TRAIN_DIR="$ROOT_DIR/models";
+    Ensemble1="$ROOT_DIR/dbof";
+    Ensemble2="$ROOT_DIR/lstm";
+    mkdir $TRAIN_DIR;
+    LABEL_LOSS="CrossEntropyLoss";
+    FEATURE_NAMES="rgb, audio";
+    FEATURE_SIZES="1024, 128";
+    DOWNLOAD_TMP_DIR="$ROOT_DIR/data_tmp";
+    mkdir $DOWNLOAD_TMP_DIR;
+    TEST_DATA="$DOWNLOAD_TMP_DIR/test*.tfrecord";
+    ENQUEUE_SIZE=4;
+    PORT=9190;
+    GPUS="0";
+    hdfs dfs -get $Ensemble1_DATA $ROOT_DIR/models/;
+    hdfs dfs -get $TEST_DATA_PATTERN $DOWNLOAD_TMP_DIR;
+    nvidia-smi;
+    cd tf-youtube-8m/youtube-8m/;
+    python -i ensemble_inference.py
+    --input_data_pattern="$TEST_DATA"
+    --feature_names="$FEATURE_NAMES"
+    --feature_sizes="$FEATURE_SIZES"
+    --train_dir="$TRAIN_DIR"
+    --output_file="$TRAIN_DIR/predictions.csv"
+    --frame_features=True
+    --batch_size=1536
+    cd $ROOT_DIR;
+    rm $DOWNLOAD_TMP_DIR;

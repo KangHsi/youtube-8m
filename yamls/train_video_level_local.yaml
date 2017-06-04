@@ -1,0 +1,59 @@
+name: ailab-liyinghong-tf-yt8m-video-level-logistic-local
+owner: liyinghong@bytedance.com
+disable_timestamp_on_name: 1
+repos:
+    tf-youtube-8m: git@code.byted.org:lab/tf-youtube-8m.git#master
+
+cpus: 4
+mem: 32768
+disk: 40960
+gpus: 1
+
+get_from_hdfs:
+    - "hdfs://haruna/user/lab/open/youtube8m/data/video_level/": video_level_feature
+
+sh: >
+    source /opt/tiger/keras2/bin/activate;
+    export LD_LIBRARY_PATH=/usr/local/cuda-8.0/lib64:$LD_LIBRARY_PATH;
+    ROOT_DIR=$(pwd);
+    DATA_DIR="$(pwd)/video_level_feature";
+    TRAIN_DATA_PATTERN="$DATA_DIR/train/train*.tfrecord";
+    VAL_DATA_PATTERN="$DATA_DIR/validate/validate*.tfrecord";
+    TRAIN_DIR="$ROOT_DIR/models/";
+    mkdir $TRAIN_DIR;
+    MODEL="LogisticModel";
+    LABEL_LOSS="CrossEntropyLoss";
+    FEATURE_NAMES="mean_rgb";
+    FEATURE_SIZES=1024;
+    PORT=9990;
+    GPUS="0";
+    bash -c "nohup tensorboard --logdir=$TRAIN_DIR --port=$PORT &";
+    nvidia-smi;
+    cd tf-youtube-8m/youtube-8m/;
+    python -i train.py
+    --train_data_pattern="$TRAIN_DATA_PATTERN"
+    --feature_names="$FEATURE_NAMES"
+    --feature_sizes="$FEATURE_SIZES"
+    --train_dir="$TRAIN_DIR"
+    --frame_features=False
+    --model="$MODEL"
+    --batch_size=128
+    --label_loss="$LABEL_LOSS"
+    --gpus="$GPUS"
+    --num_epochs=10
+    --optimizer="AdamOptimizer"
+    --disp_batches=200
+    --export_model_steps=20000;
+    python -i eval.py
+    --eval_data_pattern="$VAL_DATA_PATTERN"
+    --frame_features=False
+    --feature_names="$FEATURE_NAMES"
+    --feature_sizes="$FEATURE_SIZES"
+    --model="$MODEL"
+    --label-loss="$LABEL_LOSS"
+    --train_dir="$TRAIN_DIR"
+    --gpus="$GPUS"
+    --batch_size=1024
+    --run_once=True
+    cd $ROOT_DIR;
+    rm $DATA_DIR; 
